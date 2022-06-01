@@ -80,7 +80,14 @@ impl UserSession {
     // 更新 token 和 session。如果传入的 HeaderMap 没有满足更新的值，旧的值会保留
     pub fn update(&mut self, header_map: &HeaderMap) {
         let all_headers = header_map.get_all("set-cookie");
+        let mut token_is_take = false;
+        let mut session_is_take = false;
         for header in all_headers {
+            // 如果已经全更新完了，直接返回
+            if token_is_take && session_is_take {
+                return;
+            }
+
             let str = header.to_str();
             // early return to save regexp match time
             if str.is_err() {
@@ -88,22 +95,35 @@ impl UserSession {
             }
             // it is safe to unwrap now
             let str = str.unwrap();
-            if let Some(xsrf) = REG_XSRF.captures(str) {
-                // 如果正则解析出了新的值，则更新值，否则把原来的值放进去。
-                // 因为字符串拷贝是个开销很大的操作，所以这里先拿了一个原值的引用
-                // 然后用 map_or_else 来懒惰执行。用 closure 之后只有在遇到 None 的时候，
-                // old_token.clone() 才会被执行，于是我们当遇到 Some 的时候我们可以减少
-                // 一次字符串拷贝的开销。
-                let old_token = &self.token;
-                self.token = xsrf
-                    .get(1)
-                    .map_or_else(|| old_token.clone(), |v| v.as_str().to_string());
-            } else if let Some(cookie_match) = REG_COOKIE.captures(str) {
-                // same as above
-                let old_session = &self.session;
-                self.session = cookie_match
-                    .get(1)
-                    .map_or_else(|| old_session.clone(), |v| v.as_str().to_string())
+
+            // 如果 token 还没更新
+            if !token_is_take {
+                if let Some(xsrf) = REG_XSRF.captures(str) {
+                    // 如果正则解析出了新的值，则更新值，否则把原来的值放进去。
+                    // 因为字符串拷贝是个开销很大的操作，所以这里先拿了一个原值的引用
+                    // 然后用 map_or_else 来懒惰执行。用 closure 之后只有在遇到 None 的时候，
+                    // old_token.clone() 才会被执行，于是我们当遇到 Some 的时候我们可以减少
+                    // 一次字符串拷贝的开销。
+                    let old_token = &self.token;
+                    self.token = xsrf
+                        .get(1)
+                        .map_or_else(|| old_token.clone(), |v| v.as_str().to_string());
+
+                    token_is_take = true;
+                    continue;
+                }
+            } else if !session_is_take {
+                // 如果 session 还没更新
+                if let Some(cookie_match) = REG_COOKIE.captures(str) {
+                    // same as above
+                    let old_session = &self.session;
+                    self.session = cookie_match
+                        .get(1)
+                        .map_or_else(|| old_session.clone(), |v| v.as_str().to_string());
+
+                    session_is_take = true;
+                    continue;
+                }
             }
         }
     }
